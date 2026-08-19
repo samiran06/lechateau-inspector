@@ -30,7 +30,48 @@ function fileToBase64(file) {
     reader.readAsDataURL(file);
   });
 }
+const compressImage = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_DIMENSION = 1200;
 
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_DIMENSION) {
+            height = Math.round((height * MAX_DIMENSION) / width);
+            width = MAX_DIMENSION;
+          }
+        } else {
+          if (height > MAX_DIMENSION) {
+            width = Math.round((width * MAX_DIMENSION) / height);
+            height = MAX_DIMENSION;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        const base64Data = compressedDataUrl.split(",")[1];
+
+        resolve({ base64: base64Data, mediaType: "image/jpeg" });
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
 export default function App() {
   const [dataUrl, setDataUrl] = useState(null);
   const [base64, setBase64] = useState(null);
@@ -45,18 +86,59 @@ export default function App() {
   async function handleFile(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+
     setError(null);
     setResult(null);
+
     try {
-      const b64 = await fileToBase64(file);
-      setBase64(b64);
-      setMediaType(file.type || "image/jpeg");
-      setDataUrl(`data:${file.type};base64,${b64}`);
+      // 1. Compress the image before processing
+      const compressedDataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+          const img = new Image();
+          img.src = event.target.result;
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            const MAX_DIMENSION = 1200;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_DIMENSION) {
+                height = Math.round((height * MAX_DIMENSION) / width);
+                width = MAX_DIMENSION;
+              }
+            } else {
+              if (height > MAX_DIMENSION) {
+                width = Math.round((width * MAX_DIMENSION) / height);
+                height = MAX_DIMENSION;
+              }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, width, height);
+
+            resolve(canvas.toDataURL("image/jpeg", 0.7));
+          };
+          img.onerror = (err) => reject(err);
+        };
+        reader.onerror = (err) => reject(err);
+      });
+
+      // 2. Save the lightweight compressed data to state
+      const base64Data = compressedDataUrl.split(",")[1];
+      setBase64(base64Data);
+      setMediaType("image/jpeg");
+      setDataUrl(compressedDataUrl);
+
     } catch (err) {
+      console.error(err);
       setError("Could not read that photo. Try again.");
     }
   }
-
   async function runInspection() {
     if (!base64) {
       setError("Add a photo first.");
