@@ -1,8 +1,8 @@
 // This file runs on the SERVER (Vercel), never in the browser.
 // That's what keeps your API keys secret.
 //
-// PROVIDER SWITCH: set INSPECT_PROVIDER env var to "bytez" or "gemini".
-// Defaults to "bytez" since that's the current fallback for the demo.
+// PROVIDER SWITCH: set INSPECT_PROVIDER env var to "groq", "gemini", or "bytez".
+// Defaults to "groq" - most reliable free option currently.
 
 const SYSTEM_INSTRUCTION =
   "You are a strict professional housekeeping quality inspector. You will be shown a photo of a room. Score its visible cleanliness and tidiness on a scale of 1 to 10, where 10 is spotless and perfectly arranged, and 1 is very dirty or disorganized. Judge only what is visible: dust, stains, streaks, clutter, misaligned or scattered items, unmade surfaces, trash, smudges. Be specific and concise. Respond ONLY with strict JSON, no markdown fences, no preamble, in this exact shape: {\"score\": <integer 1-10>, \"verdict\": \"<one short phrase, 2-5 words>\", \"issues\": [\"<short specific issue>\", ...]}. If the room looks excellent, issues can be an empty array. List at most 5 issues, most important first.";
@@ -17,6 +17,43 @@ function parseScoreJson(rawText) {
     verdict: parsed.verdict || "",
     issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 5) : [],
   };
+}
+
+async function callGroq(base64, mediaType) {
+  const model = "qwen/qwen3.6-27b";
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: SYSTEM_INSTRUCTION },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Score this room's cleanliness and arrangement." },
+            { type: "image_url", image_url: { url: `data:${mediaType};base64,${base64}` } },
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    console.error("Groq API error:", data.error || data);
+    throw new Error("Groq request failed");
+  }
+
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("No response from Groq");
+
+  return parseScoreJson(text);
 }
 
 async function callBytez(base64, mediaType) {
@@ -99,10 +136,13 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing image data" });
   }
 
-  const provider = (process.env.INSPECT_PROVIDER || "bytez").toLowerCase();
+  const provider = (process.env.INSPECT_PROVIDER || "groq").toLowerCase();
 
   try {
-    const result = provider === "gemini" ? await callGemini(base64, mediaType) : await callBytez(base64, mediaType);
+    let result;
+    if (provider === "gemini") result = await callGemini(base64, mediaType);
+    else if (provider === "bytez") result = await callBytez(base64, mediaType);
+    else result = await callGroq(base64, mediaType);
     return res.status(200).json(result);
   } catch (err) {
     console.error(err);
